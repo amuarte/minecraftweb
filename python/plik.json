@@ -1,0 +1,67 @@
+{
+  "elements": [
+    {
+      "name": "slot1",
+      "x": 9,
+      "y": 54,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot2",
+      "x": 27,
+      "y": 54,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot3",
+      "x": 45,
+      "y": 54,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot10",
+      "x": 9,
+      "y": 72,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot11",
+      "x": 27,
+      "y": 72,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot12",
+      "x": 45,
+      "y": 72,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot19",
+      "x": 9,
+      "y": 90,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot20",
+      "x": 27,
+      "y": 90,
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "slot21",
+      "x": 45,
+      "y": 90,
+      "width": 16,
+      "height": 16
+    }
+  ]
+}

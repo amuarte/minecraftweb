@@ -1,5 +1,5 @@
 // textures.js - Zarządzanie teksturami i colormapą
-import { BLOCKS } from './config.js';
+import { BLOCKS, BLOCKS_REGISTRY } from './config.js';
 
 export class TextureManager {
     constructor() {
@@ -11,15 +11,19 @@ export class TextureManager {
     }
 
     async loadTextures() {
-        const textureList = {
-            stone: './assets/minecraft/textures/blocks/stone.png',
-            dirt: './assets/minecraft/textures/blocks/dirt.png',
-            leaves_oak_biome_plains: './assets/minecraft/textures/blocks/leaves_oak_biome_plains.png',
-            log_oak: './assets/minecraft/textures/blocks/log_oak.png',
-            log_oak_top: './assets/minecraft/textures/blocks/log_oak_top.png',
-            grass_side_biome_plains: './assets/minecraft/textures/blocks/grass_side_biome_plains.png',
-            grass_top_biome_plains: './assets/minecraft/textures/blocks/grass_top_biome_plains.png'
-        };
+        // Dynamicznie wygeneruj listę tekstur z rejestru bloków
+        const textureList = {};
+
+        for (const block of Object.values(BLOCKS_REGISTRY)) {
+            if (block.id === 0) continue; // Pomiń AIR
+            if (block.textures) {
+                for (const [face, textureName] of Object.entries(block.textures)) {
+                    if (textureName && !textureList[textureName]) {
+                        textureList[textureName] = `./assets/minecraft/textures/blocks/${textureName}.png`;
+                    }
+                }
+            }
+        }
 
         const promises = [];
 
@@ -88,6 +92,11 @@ export class TextureManager {
                 textures.top = this.textures.leaves_oak_biome_plains || this.textures.dirt;
                 textures.side = this.textures.leaves_oak_biome_plains || this.textures.dirt;
                 textures.bottom = this.textures.leaves_oak_biome_plains || this.textures.dirt;
+                break;
+            case 6: // PLANKS
+                textures.top = this.textures.planks_oak || this.textures.dirt;
+                textures.side = this.textures.planks_oak || this.textures.dirt;
+                textures.bottom = this.textures.planks_oak || this.textures.dirt;
                 break;
         }
 

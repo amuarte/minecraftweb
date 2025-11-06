@@ -4,6 +4,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import { UI } from './ui.js';
 import { GUIManager } from './guiManager.js';
+import { ChatManager } from './chatManager.js';
 import { TextureManager } from './textures.js';
 import { WorldSaver } from './worldSaver.js';
 
@@ -17,7 +18,15 @@ export class GameRenderer {
         this.player = null;
         this.ui = null;
         this.guiManager = null;
+        this.chatManager = null;
         this.textureManager = null;
+
+        // Osobna scena i kamera dla held block (nie reaguje na FOV głównej kamery)
+        this.heldBlockScene = null;
+        this.heldBlockCamera = null;
+
+        // 2D overlay canvas dla chatu
+        this.overlayCanvas = null;
 
         this.lastTime = performance.now();
         this.fps = 0;
@@ -30,7 +39,7 @@ export class GameRenderer {
 
     init() {
         this.worldSaver = WorldSaver;
-        
+
         // Scene
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87CEEB);
@@ -44,8 +53,20 @@ export class GameRenderer {
             1000
         );
 
+        // Held Block Scene i Camera - osobne renderowanie, stały FOV
+        this.heldBlockScene = new THREE.Scene();
+        // Przezroczyste tło - nie zakrywa głównej sceny
+        this.heldBlockScene.background = null;
+
+        this.heldBlockCamera = new THREE.PerspectiveCamera(
+            70, // Stały FOV - nie zmienia się podczas sprintu
+            window.innerWidth / window.innerHeight,
+            0.01,
+            10
+        );
+
         // Renderer
-        this.renderer = new THREE.WebGLRenderer({ 
+        this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
             antialias: false,
             powerPreference: "high-performance"
@@ -53,10 +74,11 @@ export class GameRenderer {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // === LIGHTING - Proste Three.js lighting ===
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         this.scene.add(ambientLight);
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
         dirLight.position.set(1, 1, 0.5);
         this.scene.add(dirLight);
 
@@ -66,8 +88,8 @@ export class GameRenderer {
         // World
         this.world = new World(this.scene, this.textureManager);
 
-        // Player
-        this.player = new Player(this.world, this.camera, this.canvas);
+        // Player - przekaż też held block scene i kamerę
+        this.player = new Player(this.world, this.camera, this.canvas, this.heldBlockScene, this.heldBlockCamera);
 
         // UI
         this.ui = new UI(this.worldSaver, this.world, this.player);
@@ -76,6 +98,12 @@ export class GameRenderer {
         // GUI Manager
         this.guiManager = new GUIManager(this.world, this.player, this.textureManager);
 
+        // Chat Manager - przekaż główny canvas
+        this.chatManager = new ChatManager(this.canvas);
+
+        // Expose renderer globally for hotbar editing
+        window.gameRenderer = this;
+
         // Window resize
         window.addEventListener('resize', () => this.handleResize());
     }
@@ -83,7 +111,17 @@ export class GameRenderer {
     handleResize() {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
+
+        this.heldBlockCamera.aspect = window.innerWidth / window.innerHeight;
+        this.heldBlockCamera.updateProjectionMatrix();
+
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Zmień rozmiar overlay canvas
+        if (this.overlayCanvas) {
+            this.overlayCanvas.width = window.innerWidth;
+            this.overlayCanvas.height = window.innerHeight;
+        }
     }
 
     start() {
@@ -97,13 +135,29 @@ export class GameRenderer {
         await this.textureManager.loadingPromise;
         console.log('Textures loaded!');
         console.log('Textures in manager:', Object.keys(this.textureManager.textures));
-        
+
+        // === Inicjalizuj hotbar po załadowaniu tekstur ===
+        console.log('Initializing hotbar...');
+        await this.guiManager.initializeHotbar();
+        console.log('✓ Hotbar initialized');
+
+        // === Załaduj initial chunki wokół spawn point'u ===
+        console.log('Loading initial chunks...');
+        const spawnChunkX = 0;
+        const spawnChunkZ = 0;
+        for (let x = -2; x <= 2; x++) {
+            for (let z = -2; z <= 2; z++) {
+                this.world.createChunk(spawnChunkX + x, spawnChunkZ + z);
+            }
+        }
+        console.log('✓ Loaded', this.world.chunks.size, 'initial chunks');
+
         console.log('Rebuilding', this.world.chunks.size, 'chunks...');
         this.world.chunks.forEach((chunk, key) => {
             console.log('Rebuilding chunk:', key);
             chunk.buildMesh();
         });
-        
+
         this.isReady = true;
         console.log('Game is ready, starting...');
         this.start();
@@ -119,6 +173,7 @@ export class GameRenderer {
 
             if (!this.isReady) {
                 this.renderer.render(this.scene, this.camera);
+                // NIE renderuj held block gdy gra nie jest gotowa
                 return;
             }
 
@@ -131,14 +186,24 @@ export class GameRenderer {
                 console.log('FPS:', this.fps, 'Chunks:', this.world.chunks.size);
             }
 
-            if (!this.player.pointerLocked) {
+            // Update chat
+            this.chatManager.update(delta);
+
+            // Pauzuj grę jeśli pointer lock jest wyłączony I inventory nie jest otwarte I chat nie jest otwarty
+            if (!this.player.pointerLocked && !this.guiManager.editingHotbar && !this.chatManager.isOpen) {
                 this.renderer.render(this.scene, this.camera);
+                // NIE renderuj held block gdy gra jest zapauzowana
                 return;
             }
 
-            // Update player
-            this.player.update(delta);
-            this.player.handleBlockInteraction();
+            // Blokuj player input gdy chat lub inventory są otwarte
+            const inputBlocked = this.chatManager.isOpen || this.guiManager.editingHotbar;
+
+            // Update player (ale nie gdy chat jest otwarty)
+            if (!inputBlocked) {
+                this.player.update(delta);
+                this.player.handleBlockInteraction();
+            }
 
             // Load chunks
             const playerChunkX = Math.floor(this.player.position.x / CONFIG.CHUNK_SIZE);
@@ -149,6 +214,10 @@ export class GameRenderer {
                     this.world.createChunk(playerChunkX + x, playerChunkZ + z);
                 }
             }
+
+            // Rebuild dirty chunks (batched mesh updates) - AFTER create chunks
+            // Bo nowe chunki mogą oznaczyć sąsiadów jako dirty
+            this.world.rebuildDirtyChunks();
 
             // Update UI
             this.ui.updateStats({
@@ -169,9 +238,64 @@ export class GameRenderer {
                 this.guiManager.update();
             }
 
+            // Renderuj główną scenę + held block scene w jednym passe
+            // autoClear = false zapobiega zbędnemu czyszczeniu między renderami
             this.renderer.render(this.scene, this.camera);
+            this.renderer.autoClear = false;
+            this.renderer.clearDepth(); // Tylko depth, nie kolor
+            this.renderer.render(this.heldBlockScene, this.heldBlockCamera);
+            this.renderer.autoClear = true;
+
+            // Renderuj chat overlay (2D canvas na top WebGL canvas)
+            if (this.chatManager.isOpen) {
+                this.renderChatOverlay();
+            } else {
+                // Ukryj overlay canvas gdy chat jest zamknięty
+                if (this.overlayCanvas) {
+                    this.overlayCanvas.style.display = 'none';
+                }
+            }
         };
 
         tick();
+    }
+
+    renderChatOverlay() {
+        // Utwórz overlay canvas jeśli nie istnieje
+        if (!this.overlayCanvas) {
+            this.overlayCanvas = document.createElement('canvas');
+            this.overlayCanvas.id = 'chat-overlay';
+            this.overlayCanvas.width = window.innerWidth;
+            this.overlayCanvas.height = window.innerHeight;
+            this.overlayCanvas.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                display: block;
+                z-index: 999;
+                pointer-events: none;
+            `;
+            document.body.appendChild(this.overlayCanvas);
+        }
+
+        // Upewnij się że overlay canvas jest widoczny
+        this.overlayCanvas.style.display = 'block';
+
+        // Pobierz 2D context
+        const ctx = this.overlayCanvas.getContext('2d');
+        if (!ctx) return;
+
+        // Wyłącz interpolację dla pixel-perfect renderowania
+        ctx.imageSmoothingEnabled = false;
+
+        // Wyczyść overlay canvas
+        ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+
+        // Pobierz canvas z tekstami chatu
+        const chatCanvas = this.chatManager.getTextCanvas();
+
+        // Rysuj chat w bottom-left corner bez dodatkowego skalowania
+        // Canvas jest już wyrenderowany z scale=3 w drawText()
+        ctx.drawImage(chatCanvas, 0, this.overlayCanvas.height - chatCanvas.height, chatCanvas.width, chatCanvas.height);
     }
 }

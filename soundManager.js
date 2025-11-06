@@ -1,5 +1,5 @@
 // soundManager.js - Zarządzanie dźwiękami kroków dla różnych materiałów
-import { CONFIG, BLOCKS } from './config.js';
+import { CONFIG, BLOCKS, getMaterialFromBlockId } from './config.js';
 
 export class SoundManager {
     constructor(world) {
@@ -71,20 +71,8 @@ export class SoundManager {
     }
 
     getMaterialFromBlock(blockType) {
-        switch(blockType) {
-            case BLOCKS.GRASS:
-                return 'grass';
-            case BLOCKS.DIRT:
-                return 'dirt';
-            case BLOCKS.STONE:
-                return 'stone';
-            case BLOCKS.WOOD:
-                return 'wood';
-            case BLOCKS.LEAVES:
-                return 'leaves';
-            default:
-                return null;
-        }
+        // Pobierz material z rejestru bloków
+        return getMaterialFromBlockId(blockType);
     }
 
     playStepSound(currentPosition, velocity) {

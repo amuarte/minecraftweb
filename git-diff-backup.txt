@@ -1,0 +1,144 @@
+diff --git a/player.js b/player.js
+index 353c993..6e44fd3 100644
+--- a/player.js
++++ b/player.js
+@@ -1,4 +1,8 @@
+-// player.js - Logika gracza z dokładną fizyką z MC 1.8.8
++// Bobbing bloku - tylko pozycja Y
++        if (this && this.isMoving && !this.flying && this.onGround) {
++            const bobOffset = Math.sin(this.bobTime * Math.PI) * this.bobAmount * 0.5;
++            this.heldBlockMesh.position.y += bobOffset;
++        }// player.js - Logika gracza z dokładną fizyką z MC 1.8.8
+ import { CONFIG, BLOCKS } from './config.js';
+ import { SoundManager } from './soundManager.js';
+ 
+@@ -58,6 +62,9 @@ export class Player {
+         
+         // Held block
+         this.heldBlockMesh = null;
++        this.lastSelectedBlock = null;
++        
++        // Czekaj na załadowanie world'u aby stworzyć held block
+ 
+         this.setupInputListeners();
+     }
+@@ -469,48 +476,82 @@ export class Player {
+     }
+ 
+     updateHeldBlock(delta) {
+-        // Utwórz held block jeśli nie istnieje
+-        if (!this.heldBlockMesh) {
+-            const geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+-            
+-            // Ustaw teksturę dla wybranego bloku
+-            const textureMap = {
+-                1: 'grass_top_biome_plains',
+-                2: 'dirt',
+-                3: 'stone',
+-                4: 'log_oak_top',
+-                5: 'leaves_oak_biome_plains'
+-            };
++        // Utwórz held block jeśli nie istnieje i world jest gotowy
++        if (!this.heldBlockMesh && this.world && this.world.scene) {
++            const geometry = new THREE.BoxGeometry(1, 1, 1);
++            const materials = [
++                new THREE.MeshPhongMaterial({ color: 0xffffff }),
++                new THREE.MeshPhongMaterial({ color: 0xffffff }),
++                new THREE.MeshPhongMaterial({ color: 0xffffff }),
++                new THREE.MeshPhongMaterial({ color: 0xffffff }),
++                new THREE.MeshPhongMaterial({ color: 0xffffff }),
++                new THREE.MeshPhongMaterial({ color: 0xffffff })
++            ];
+             
+-            const textureName = textureMap[this.selectedBlock] || 'dirt';
+-            let texture = null;
+-            
+-            if (this.world && this.world.textureManager && this.world.textureManager.textures) {
+-                texture = this.world.textureManager.textures[textureName];
+-            }
+-            
+-            const material = new THREE.MeshLambertMaterial({ 
+-                map: texture || null,
+-                color: 0xffffff
+-            });
+-            
+-            this.heldBlockMesh = new THREE.Mesh(geometry, material);
+-            this.camera.add(this.heldBlockMesh);
+-            console.log('Held block created:', this.heldBlockMesh);
++            this.heldBlockMesh = new THREE.Mesh(geometry, materials);
++            this.heldBlockMesh.scale.set(0.68, 0.68, 0.68);
++            this.world.scene.add(this.heldBlockMesh);
++            console.log('Held block created');
+         }
+         
+-        // Pozycjonuj blok w prawym dolnym rogu kamery
+-        this.heldBlockMesh.position.set(0.3, -0.3, -0.5);
++        if (!this.heldBlockMesh) return; // Wyjdź jeśli się nie stworzyło
+         
+-        // Obróć blok
+-        this.heldBlockMesh.rotation.x += delta * 0.5;
+-        this.heldBlockMesh.rotation.y += delta * 0.3;
+-        
+-        // Bobbing bloku - taka sama animacja jak kamera
+-        if (this.isMoving && !this.flying && this.onGround) {
+-            const bobOffset = Math.sin(this.bobTime * Math.PI) * this.bobAmount * 0.5;
+-            this.heldBlockMesh.position.y = -0.3 + bobOffset;
++        // Zmień tekstury jeśli gracz zmienił wybrany blok
++        if (this.lastSelectedBlock !== this.selectedBlock) {
++            this.updateBlockMaterials();
++            this.lastSelectedBlock = this.selectedBlock;
+         }
++        
++        // Pozycjonuj blok względem kamery - MC firstperson_righthand
++        // Translation w MC: [1.13, 3.2, 1.13]
++        const offset = new THREE.Vector3(1.13, 3.2, 1.13);
++        offset.applyEuler(this.rotation);
++        
++        this.heldBlockMesh.position.copy(this.camera.position).add(offset);
++        
++        // Rotation MC firstperson: [0, -90, 25] stopnie
++        this.heldBlockMesh.rotation.order = 'YXZ';
++        this.heldBlockMesh.rotation.y = -Math.PI / 2;
++        this.heldBlockMesh.rotation.x = 25 * Math.PI / 180;
++        this.heldBlockMesh.rotation.z = 0;
++        
++        // Scale MC: [0.68, 0.68, 0.68]
++        this.heldBlockMesh.scale.set(0.68, 0.68, 0.68);
++    }
++
++    updateBlockMaterials() {
++        if (!this.heldBlockMesh) return;
++        
++        const textureMap = {
++            1: { top: 'grass_top_biome_plains', side: 'grass_side_biome_plains', bottom: 'dirt' }, // GRASS
++            2: { top: 'dirt', side: 'dirt', bottom: 'dirt' }, // DIRT
++            3: { top: 'stone', side: 'stone', bottom: 'stone' }, // STONE
++            4: { top: 'log_oak_top', side: 'log_oak', bottom: 'log_oak_top' }, // WOOD
++            5: { top: 'leaves_oak_biome_plains', side: 'leaves_oak_biome_plains', bottom: 'leaves_oak_biome_plains' } // LEAVES
++        };
++        
++        const blockTextures = textureMap[this.selectedBlock] || textureMap[2];
++        
++        if (!this.world || !this.world.textureManager) return;
++        
++        const textures = {
++            top: this.world.textureManager.textures[blockTextures.top],
++            side: this.world.textureManager.textures[blockTextures.side],
++            bottom: this.world.textureManager.textures[blockTextures.bottom]
++        };
++        
++        // Przypisz tekstury do stron:
++        // 0: +X (prawo), 1: -X (lewo), 2: +Y (góra), 3: -Y (dół), 4: +Z (przód), 5: -Z (tył)
++        const materials = [
++            new THREE.MeshPhongMaterial({ map: textures.side, emissive: 0x000000 }), // +X (prawo)
++            new THREE.MeshPhongMaterial({ map: textures.side, emissive: 0x000000 }), // -X (lewo)
++            new THREE.MeshPhongMaterial({ map: textures.top, emissive: 0x000000 }),  // +Y (góra)
++            new THREE.MeshPhongMaterial({ map: textures.bottom, emissive: 0x000000 }), // -Y (dół)
++            new THREE.MeshPhongMaterial({ map: textures.side, emissive: 0x000000 }), // +Z (przód)
++            new THREE.MeshPhongMaterial({ map: textures.side, emissive: 0x000000 })  // -Z (tył)
++        ];
++        
++        this.heldBlockMesh.material = materials;
+     }
+ 
+     requestPointerLock() {

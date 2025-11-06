@@ -1,10 +1,28 @@
 // chunk.js - Generowanie i renderowanie chunków
-import { CONFIG, BLOCKS } from './config.js';
+import { CONFIG, BLOCKS, getTextureForFace } from './config.js';
 
+// System generatorów światów - dla kompatybilności wstecz
+const TERRAIN_GENERATORS = {
+    // Generator "classic" - pierwotny, płaski świat
+    classic: (x, z, seed) => {
+        const n = Math.sin(x * 0.1 + seed) * Math.cos(z * 0.1 + seed) * 5 +
+                  Math.sin(x * 0.05 + seed) * Math.cos(z * 0.05 + seed) * 10;
+        return Math.floor(n + CONFIG.CHUNK_HEIGHT / 2);
+    },
+
+    // Generator "hilly" - dramatyczne wzgórza i doliny
+    hilly: (x, z, seed) => {
+        const n1 = Math.sin(x * 0.05 + seed) * Math.cos(z * 0.05 + seed) * 15;
+        const n2 = Math.sin(x * 0.02 + seed) * Math.cos(z * 0.02 + seed) * 20;
+        const n3 = Math.sin(x * 0.15 + seed) * Math.cos(z * 0.15 + seed) * 8;
+        const total = n1 + n2 + n3;
+        return Math.floor(total + CONFIG.CHUNK_HEIGHT / 2);
+    }
+};
+
+// Alias dla kompatybilności wstecz - "noise" mapuje na "classic"
 function noise(x, z, seed = 0) {
-    const n = Math.sin(x * 0.1 + seed) * Math.cos(z * 0.1 + seed) * 5 +
-              Math.sin(x * 0.05 + seed) * Math.cos(z * 0.05 + seed) * 10;
-    return Math.floor(n + CONFIG.CHUNK_HEIGHT / 2);
+    return TERRAIN_GENERATORS.classic(x, z, seed);
 }
 
 export class Chunk {
@@ -15,6 +33,7 @@ export class Chunk {
         this.world = world;
         this.textureManager = textureManager;
         this.blocks = new Uint8Array(CONFIG.CHUNK_SIZE * CONFIG.CHUNK_HEIGHT * CONFIG.CHUNK_SIZE);
+
         this.meshes = [];
         this.generate();
         this.buildMesh();
@@ -25,7 +44,8 @@ export class Chunk {
             for (let z = 0; z < CONFIG.CHUNK_SIZE; z++) {
                 const worldX = this.x * CONFIG.CHUNK_SIZE + x;
                 const worldZ = this.z * CONFIG.CHUNK_SIZE + z;
-                const height = noise(worldX, worldZ, this.world.seed);
+                const generator = TERRAIN_GENERATORS[this.world.generatorType] || TERRAIN_GENERATORS.classic;
+                const height = generator(worldX, worldZ, this.world.seed);
 
                 for (let y = 0; y < CONFIG.CHUNK_HEIGHT; y++) {
                     const index = this.getIndex(x, y, z);
@@ -38,6 +58,7 @@ export class Chunk {
                     } else {
                         this.blocks[index] = BLOCKS.AIR;
                     }
+                    // Light data (skyLightData, blockLightData) będzie ustawiana przez lighting system
                 }
             }
         }
@@ -45,6 +66,25 @@ export class Chunk {
 
     getIndex(x, y, z) {
         return x + z * CONFIG.CHUNK_SIZE + y * CONFIG.CHUNK_SIZE * CONFIG.CHUNK_SIZE;
+    }
+
+    // Sprawdź czy blok jest przezroczysty dla cullingu
+    // AIR i GLASS są transparent dla cullingu
+    // LEAVES mogą być przezroczyste
+    isTransparentBlock(blockType) {
+        return blockType === BLOCKS.AIR || blockType === BLOCKS.GLASS || blockType === BLOCKS.LEAVES;
+    }
+
+    // Sprawdź czy należy renderować ścianę
+    // Renderuj jeśli sąsiad jest transparent dla cullingu
+    // CHYBA ŻE to GLASS obok GLASS - wtedy nie renderuj
+    shouldRenderFace(currentBlock, adjacentBlock) {
+        // Glass obok glass: nie renderuj (specjalna reguła dla glass)
+        if (currentBlock === BLOCKS.GLASS && adjacentBlock === BLOCKS.GLASS) {
+            return false;
+        }
+        // Renderuj jeśli sąsiad jest transparent (AIR, GLASS, lub LEAVES)
+        return this.isTransparentBlock(adjacentBlock);
     }
 
     getBlock(x, y, z) {
@@ -55,11 +95,12 @@ export class Chunk {
     }
 
     setBlock(x, y, z, type) {
-        if (x < 0 || x >= CONFIG.CHUNK_SIZE || 
-            y < 0 || y >= CONFIG.CHUNK_HEIGHT || 
+        if (x < 0 || x >= CONFIG.CHUNK_SIZE ||
+            y < 0 || y >= CONFIG.CHUNK_HEIGHT ||
             z < 0 || z >= CONFIG.CHUNK_SIZE) return;
         this.blocks[this.getIndex(x, y, z)] = type;
     }
+
 
     buildMesh() {
         if (!this.textureManager) return;
@@ -80,7 +121,9 @@ export class Chunk {
             stone: { vertices: [], uvs: [], indices: [], count: 0 },
             log_oak: { vertices: [], uvs: [], indices: [], count: 0 },
             log_oak_top: { vertices: [], uvs: [], indices: [], count: 0 },
-            leaves_oak_biome_plains: { vertices: [], uvs: [], indices: [], count: 0 }
+            leaves_oak_biome_plains: { vertices: [], uvs: [], indices: [], count: 0 },
+            planks_oak: { vertices: [], uvs: [], indices: [], count: 0 },
+            glass: { vertices: [], uvs: [], indices: [], count: 0 }
         };
 
         for (let y = 0; y < CONFIG.CHUNK_HEIGHT; y++) {
@@ -105,69 +148,77 @@ export class Chunk {
                     };
 
                     // TOP
-                    if (y + 1 >= CONFIG.CHUNK_HEIGHT || this.blocks[this.getIndex(x, y + 1, z)] === BLOCKS.AIR) {
+                    if (y + 1 >= CONFIG.CHUNK_HEIGHT) {
                         const texName = this.getTextureForFace(block, 'top');
-                        this.addQuad(geometries[texName], [wx, wy + 1, wz], [wx + 1, wy + 1, wz], 
-                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1]);
+                        this.addQuad(geometries[texName], [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
+                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false, 'top');
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y + 1, z)])) {
+                        const texName = this.getTextureForFace(block, 'top');
+                        this.addQuad(geometries[texName], [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
+                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false, 'top');
                     }
-                    
+
                     // BOTTOM
-                    if (y === 0 || this.blocks[this.getIndex(x, y - 1, z)] === BLOCKS.AIR) {
+                    if (y === 0) {
                         const texName = this.getTextureForFace(block, 'bottom');
-                        this.addQuad(geometries[texName], [wx, wy, wz], [wx, wy, wz + 1], 
-                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz]);
+                        this.addQuad(geometries[texName], [wx, wy, wz], [wx, wy, wz + 1],
+                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false, 'bottom');
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y - 1, z)])) {
+                        const texName = this.getTextureForFace(block, 'bottom');
+                        this.addQuad(geometries[texName], [wx, wy, wz], [wx, wy, wz + 1],
+                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false, 'bottom');
                     }
-                    
+
                     // NORTH
                     if (z === CONFIG.CHUNK_SIZE - 1) {
-                        if (checkBlock(x, y, z + 1) === BLOCKS.AIR) {
+                        if (this.shouldRenderFace(block, checkBlock(x, y, z + 1))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1], 
-                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true);
+                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
+                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true, 'north');
                         }
-                    } else if (this.blocks[this.getIndex(x, y, z + 1)] === BLOCKS.AIR) {
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y, z + 1)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1], 
-                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true);
+                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
+                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true, 'north');
                     }
-                    
+
                     // SOUTH
                     if (z === 0) {
-                        if (checkBlock(x, y, z - 1) === BLOCKS.AIR) {
+                        if (this.shouldRenderFace(block, checkBlock(x, y, z - 1))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz], 
-                                [wx, wy + 1, wz], [wx, wy, wz], true);
+                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
+                                [wx, wy + 1, wz], [wx, wy, wz], true, 'south');
                         }
-                    } else if (this.blocks[this.getIndex(x, y, z - 1)] === BLOCKS.AIR) {
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y, z - 1)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz], 
-                            [wx, wy + 1, wz], [wx, wy, wz], true);
+                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
+                            [wx, wy + 1, wz], [wx, wy, wz], true, 'south');
                     }
-                    
+
                     // EAST
                     if (x === CONFIG.CHUNK_SIZE - 1) {
-                        if (checkBlock(x + 1, y, z) === BLOCKS.AIR) {
+                        if (this.shouldRenderFace(block, checkBlock(x + 1, y, z))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1], 
-                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz]);
+                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
+                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false, 'east');
                         }
-                    } else if (this.blocks[this.getIndex(x + 1, y, z)] === BLOCKS.AIR) {
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x + 1, y, z)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1], 
-                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz]);
+                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
+                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false, 'east');
                     }
-                    
+
                     // WEST
                     if (x === 0) {
-                        if (checkBlock(x - 1, y, z) === BLOCKS.AIR) {
+                        if (this.shouldRenderFace(block, checkBlock(x - 1, y, z))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz], 
-                                [wx, wy + 1, wz], [wx, wy + 1, wz + 1]);
+                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz],
+                                [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false, 'west');
                         }
-                    } else if (this.blocks[this.getIndex(x - 1, y, z)] === BLOCKS.AIR) {
+                    } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x - 1, y, z)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz], 
-                            [wx, wy + 1, wz], [wx, wy + 1, wz + 1]);
+                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz],
+                            [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false, 'west');
                     }
                 }
             }
@@ -184,9 +235,16 @@ export class Chunk {
             geometry.computeVertexNormals();
 
             const texture = this.textureManager.textures[texName];
-            const material = new THREE.MeshLambertMaterial({ 
+
+            // Glass i leaves mają alpha channel - transparent material
+            const isTransparent = texName === 'glass' || texName.includes('leaves');
+            const isGlass = texName === 'glass';
+
+            const material = new THREE.MeshLambertMaterial({
                 map: texture,
-                side: THREE.FrontSide
+                side: THREE.FrontSide, // Wszystkie bloki: tylko front side
+                transparent: isTransparent,
+                alphaTest: isTransparent ? 0.5 : 0
             });
 
             const mesh = new THREE.Mesh(geometry, material);
@@ -196,30 +254,15 @@ export class Chunk {
     }
 
     getTextureForFace(blockType, face) {
-        switch(blockType) {
-            case 1: // GRASS
-                if (face === 'top') return 'grass_top_biome_plains';
-                if (face === 'bottom') return 'dirt';
-                return 'grass_side_biome_plains';
-            case 2: // DIRT
-                return 'dirt';
-            case 3: // STONE
-                return 'stone';
-            case 4: // WOOD
-                if (face === 'top' || face === 'bottom') return 'log_oak_top';
-                return 'log_oak';
-            case 5: // LEAVES
-                return 'leaves_oak_biome_plains';
-            default:
-                return 'dirt';
-        }
+        // Pobierz teksturę z rejestru bloków
+        return getTextureForFace(blockType, face);
     }
 
-    addQuad(geo, v0, v1, v2, v3, rotateUV = false) {
+    addQuad(geo, v0, v1, v2, v3, rotateUV = false, face = 'top') {
         const startIndex = geo.count;
-        
+
         geo.vertices.push(...v0, ...v1, ...v2, ...v3);
-        
+
         // UV: normalnie [0,0], [1,0], [1,1], [0,1]
         // Rotacja o -90st: [1,0], [1,1], [0,1], [0,0]
         if (rotateUV) {
@@ -227,12 +270,12 @@ export class Chunk {
         } else {
             geo.uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
         }
-        
+
         geo.indices.push(
             startIndex, startIndex + 2, startIndex + 1,
             startIndex, startIndex + 3, startIndex + 2
         );
-        
+
         geo.count += 4;
     }
 
@@ -240,3 +283,5 @@ export class Chunk {
         this.buildMesh();
     }
 }
+
+export { TERRAIN_GENERATORS };
