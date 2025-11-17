@@ -410,25 +410,30 @@ export class Player {
         const radius = this.playerRadius;
         const height = this.playerHeight;
 
-        // Punkty sprawdzenia kolizji - ZBALANSOWANE: 11 punktów
-        // Zapewnia dokładną kolizję przy dobrej wydajności
+        // Punkty sprawdzenia kolizji - 13 punktów (dół + środek + góra)
+        // Każdy poziom: środek + 4 NAROŻNIKI dla pełnej kolizji
+        const r = radius * 0.95; // 95% radiusa dla stabilności
+
         const checkPoints = [
             // Dół: środek + 4 narożniki (5 punktów)
             [0, 0.1, 0],
-            [radius * 0.9, 0.1, radius * 0.9],
-            [radius * 0.9, 0.1, -radius * 0.9],
-            [-radius * 0.9, 0.1, radius * 0.9],
-            [-radius * 0.9, 0.1, -radius * 0.9],
+            [r, 0.1, r],
+            [r, 0.1, -r],
+            [-r, 0.1, r],
+            [-r, 0.1, -r],
 
-            // Środek ciała: środek + 4 narożniki (5 punktów) - KLUCZOWE dla ścian!
+            // Środek ciała: środek + 4 NAROŻNIKI (5 punktów) - KLUCZOWE!
+            // Narożniki są ważniejsze niż kierunki dla kolizji z rogami bloków
             [0, height * 0.5, 0],
-            [radius * 0.85, height * 0.5, 0],
-            [-radius * 0.85, height * 0.5, 0],
-            [0, height * 0.5, radius * 0.85],
-            [0, height * 0.5, -radius * 0.85],
+            [r, height * 0.5, r],
+            [r, height * 0.5, -r],
+            [-r, height * 0.5, r],
+            [-r, height * 0.5, -r],
 
-            // Góra: środek (1 punkt) - dla sufitów
+            // Góra: środek + 2 narożniki po przekątnej (3 punkty) - dla sufitów
             [0, height - 0.15, 0],
+            [r * 0.7, height - 0.15, r * 0.7],
+            [-r * 0.7, height - 0.15, -r * 0.7],
         ];
 
         for (const [dx, dy, dz] of checkPoints) {
@@ -446,21 +451,23 @@ export class Player {
     }
 
     checkCameraCollision(cameraPos) {
-        // Sprawdź kolizję na poziomie kamery - 7 punktów dla dokładności
-        const radius = this.playerRadius * 0.5; // Zwiększono radius dla lepszej kolizji głowy
+        // Sprawdź kolizję na poziomie kamery/głowy - 9 punktów
+        const radius = this.playerRadius * 0.6; // 60% radiusa dla głowy
+        const r = radius;
 
         const checkPoints = [
-            // Środek kamery
+            // Poziom kamery: środek + 4 narożniki (5 punktów)
             [0, 0, 0],
+            [r, 0, r],
+            [r, 0, -r],
+            [-r, 0, r],
+            [-r, 0, -r],
 
-            // Sufity - sprawdź wyżej
+            // Sufity (sprawdź wyżej): środek + 4 narożniki (4 punkty)
             [0, 0.2, 0],
-
-            // 4 kierunki wokół głowy (N, S, E, W) - ważne dla przejść
-            [radius, 0, 0],      // East
-            [-radius, 0, 0],     // West
-            [0, 0, radius],      // North
-            [0, 0, -radius],     // South
+            [r, 0.2, r],
+            [r, 0.2, -r],
+            [-r, 0.2, -r],
         ];
 
         for (const [dx, dy, dz] of checkPoints) {
