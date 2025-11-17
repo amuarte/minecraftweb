@@ -410,64 +410,55 @@ export class Player {
         const radius = this.playerRadius;
         const height = this.playerHeight;
 
-        // Punkty sprawdzenia kolizji - ZOPTYMALIZOWANE do 7 punktów
-        // Zamiast 25 punktów: tylko narożniki + środek
+        // Punkty sprawdzenia kolizji - ULTRA ZOPTYMALIZOWANE do 5 punktów
+        // Minimum punktów dla dokładnej kolizji
         const checkPoints = [
-            // Środek (każdy poziom)
+            // Środek (dół i góra)
             [0, 0, 0],
-            [0, height * 0.5, 0],
-            [0, height - 0.2, 0],
+            [0, height - 0.1, 0],
 
-            // Narożniki na dnie i górze (4 + 2)
+            // 4 narożniki na dole (najpotrzebniejsze)
             [radius, 0, radius],
             [radius, 0, -radius],
             [-radius, 0, radius],
             [-radius, 0, -radius],
-
-            // Górne narożniki dla sufitów
-            [radius * 0.8, height - 0.2, radius * 0.8],
-            [-radius * 0.8, height - 0.2, -radius * 0.8],
         ];
-        
+
         for (const [dx, dy, dz] of checkPoints) {
             const x = Math.floor(pos.x + dx);
             const y = Math.floor(pos.y + dy);
             const z = Math.floor(pos.z + dz);
-            
+
             const block = this.world.getBlock(x, y, z);
             if (block !== BLOCKS.AIR) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
     checkCameraCollision(cameraPos) {
-        // Sprawdź kolizję na poziomie kamery - mniejsza głowa dla mini skoków
+        // Sprawdź kolizję na poziomie kamery - zoptymalizowane do 3 punktów
         const radius = this.playerRadius * 0.3;
-        
+
         const checkPoints = [
-            [0, 0, 0],
-            [radius, 0, 0],
-            [-radius, 0, 0],
-            [0, 0, radius],
-            [0, 0, -radius],
-            // Wyżej (sufity!)
-            [0, 0.2, 0],
+            [0, 0, 0],        // Środek kamery
+            [0, 0.2, 0],      // Nieco wyżej (sufity)
+            [radius, 0, 0],   // Jeden bok
         ];
-        
+
         for (const [dx, dy, dz] of checkPoints) {
             const x = Math.floor(cameraPos.x + dx);
             const y = Math.floor(cameraPos.y + dy);
             const z = Math.floor(cameraPos.z + dz);
-            
+
             const block = this.world.getBlock(x, y, z);
             if (block !== BLOCKS.AIR) {
                 return true;
             }
         }
-        
+
         return false;
     }
 

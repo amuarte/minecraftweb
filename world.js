@@ -27,6 +27,9 @@ export class World {
 
         // Mesh delta updates - zamiast rebuild od razu, zbieraj dirty chunks
         this.dirtyChunks = new Set();
+
+        // Chunk unloading - usuń chunki poza zasięgiem
+        this.maxChunkDistance = CONFIG.RENDER_DISTANCE + 2; // +2 buffer dla smooth loading
     }
 
     getChunkKey(x, z) {
@@ -82,14 +85,14 @@ export class World {
         this.dirtyChunks.add(key);
     }
 
-    // Przebuduj 1-2 dirty chunks per frame (incremental) - zapobiega lag spike'om
+    // Przebuduj 3-4 dirty chunks per frame (incremental) - zoptymalizowane
     rebuildDirtyChunks() {
         if (this.dirtyChunks.size === 0) return;
 
-        // Rebuild max 2 chunki per frame - rozprowadza mesh building ale jest dość szybko
+        // Rebuild max 4 chunki per frame - zwiększona wydajność
         let count = 0;
         for (const key of this.dirtyChunks) {
-            if (count >= 2) break; // Max 2 per frame
+            if (count >= 4) break; // Max 4 per frame (zwiększone z 2)
             const chunk = this.chunks.get(key);
             if (chunk) {
                 chunk.buildMesh();
@@ -97,6 +100,50 @@ export class World {
             this.dirtyChunks.delete(key);
             count++;
         }
+    }
+
+    // Usuń chunki poza zasięgiem gracza
+    unloadDistantChunks(playerChunkX, playerChunkZ) {
+        const chunksToRemove = [];
+
+        for (const [key, chunk] of this.chunks) {
+            const dx = chunk.x - playerChunkX;
+            const dz = chunk.z - playerChunkZ;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+
+            if (distance > this.maxChunkDistance) {
+                chunksToRemove.push(key);
+            }
+        }
+
+        // Usuń chunki
+        chunksToRemove.forEach(key => {
+            const chunk = this.chunks.get(key);
+            if (chunk) {
+                chunk.dispose();
+                this.chunks.delete(key);
+            }
+        });
+
+        if (chunksToRemove.length > 0) {
+            console.log(`Unloaded ${chunksToRemove.length} distant chunks`);
+        }
+    }
+
+    // Frustum culling - ukryj chunki poza widokiem kamery
+    updateChunkVisibility(frustum) {
+        let visibleCount = 0;
+        let hiddenCount = 0;
+
+        for (const chunk of this.chunks.values()) {
+            const visible = chunk.isVisibleInFrustum(frustum);
+            chunk.setVisible(visible);
+            if (visible) visibleCount++;
+            else hiddenCount++;
+        }
+
+        // Zwróć statystyki dla debug
+        return { visible: visibleCount, hidden: hiddenCount };
     }
 
 }

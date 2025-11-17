@@ -35,6 +35,17 @@ export class Chunk {
         this.blocks = new Uint8Array(CONFIG.CHUNK_SIZE * CONFIG.CHUNK_HEIGHT * CONFIG.CHUNK_SIZE);
 
         this.meshes = [];
+
+        // Bounding sphere dla frustum culling
+        this.boundingSphere = new THREE.Sphere(
+            new THREE.Vector3(
+                this.x * CONFIG.CHUNK_SIZE + CONFIG.CHUNK_SIZE / 2,
+                CONFIG.CHUNK_HEIGHT / 2,
+                this.z * CONFIG.CHUNK_SIZE + CONFIG.CHUNK_SIZE / 2
+            ),
+            Math.sqrt(CONFIG.CHUNK_SIZE * CONFIG.CHUNK_SIZE + CONFIG.CHUNK_HEIGHT * CONFIG.CHUNK_HEIGHT) * 0.6
+        );
+
         this.generate();
         this.buildMesh();
     }
@@ -109,22 +120,26 @@ export class Chunk {
         this.meshes.forEach(m => {
             this.scene.remove(m);
             if (m.geometry) m.geometry.dispose();
-            if (m.material) m.material.dispose();
+            if (Array.isArray(m.material)) {
+                m.material.forEach(mat => mat.dispose());
+            } else {
+                m.material.dispose();
+            }
         });
         this.meshes = [];
 
-        // Geometry dla każdego typu tekstury
-        const geometries = {
-            grass_top_biome_plains: { vertices: [], uvs: [], indices: [], count: 0 },
-            grass_side_biome_plains: { vertices: [], uvs: [], indices: [], count: 0 },
-            dirt: { vertices: [], uvs: [], indices: [], count: 0 },
-            stone: { vertices: [], uvs: [], indices: [], count: 0 },
-            log_oak: { vertices: [], uvs: [], indices: [], count: 0 },
-            log_oak_top: { vertices: [], uvs: [], indices: [], count: 0 },
-            leaves_oak_biome_plains: { vertices: [], uvs: [], indices: [], count: 0 },
-            planks_oak: { vertices: [], uvs: [], indices: [], count: 0 },
-            glass: { vertices: [], uvs: [], indices: [], count: 0 }
-        };
+        // Dwie główne geometrie: opaque i transparent
+        // To zmniejszy draw calls z ~9 per chunk do ~2 per chunk!
+        const opaqueGeo = { vertices: [], uvs: [], indices: [], count: 0, groups: [] };
+        const transparentGeo = { vertices: [], uvs: [], indices: [], count: 0, groups: [] };
+
+        // Mapowanie tekstur do indeksów materiałów
+        const textureNames = [
+            'grass_top_biome_plains', 'grass_side_biome_plains', 'dirt', 'stone',
+            'log_oak', 'log_oak_top', 'planks_oak', 'leaves_oak_biome_plains', 'glass'
+        ];
+        const texNameToIndex = {};
+        textureNames.forEach((name, idx) => { texNameToIndex[name] = idx; });
 
         for (let y = 0; y < CONFIG.CHUNK_HEIGHT; y++) {
             for (let z = 0; z < CONFIG.CHUNK_SIZE; z++) {
@@ -147,107 +162,145 @@ export class Chunk {
                         return chunk.blocks[chunk.getIndex(localLx, ly, localLz)];
                     };
 
+                    // Wybierz target geometry (opaque lub transparent)
+                    const isTransparentBlock = block === BLOCKS.GLASS || block === BLOCKS.LEAVES;
+                    const targetGeo = isTransparentBlock ? transparentGeo : opaqueGeo;
+
                     // TOP
                     if (y + 1 >= CONFIG.CHUNK_HEIGHT) {
                         const texName = this.getTextureForFace(block, 'top');
-                        this.addQuad(geometries[texName], [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
-                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false, 'top');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
+                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false);
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y + 1, z)])) {
                         const texName = this.getTextureForFace(block, 'top');
-                        this.addQuad(geometries[texName], [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
-                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false, 'top');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy + 1, wz], [wx + 1, wy + 1, wz],
+                            [wx + 1, wy + 1, wz + 1], [wx, wy + 1, wz + 1], false);
                     }
 
                     // BOTTOM
                     if (y === 0) {
                         const texName = this.getTextureForFace(block, 'bottom');
-                        this.addQuad(geometries[texName], [wx, wy, wz], [wx, wy, wz + 1],
-                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false, 'bottom');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz], [wx, wy, wz + 1],
+                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false);
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y - 1, z)])) {
                         const texName = this.getTextureForFace(block, 'bottom');
-                        this.addQuad(geometries[texName], [wx, wy, wz], [wx, wy, wz + 1],
-                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false, 'bottom');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz], [wx, wy, wz + 1],
+                            [wx + 1, wy, wz + 1], [wx + 1, wy, wz], false);
                     }
 
                     // NORTH
                     if (z === CONFIG.CHUNK_SIZE - 1) {
                         if (this.shouldRenderFace(block, checkBlock(x, y, z + 1))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
-                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true, 'north');
+                            const matIndex = texNameToIndex[texName] || 0;
+                            this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
+                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true);
                         }
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y, z + 1)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
-                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true, 'north');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz + 1], [wx, wy + 1, wz + 1],
+                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy, wz + 1], true);
                     }
 
                     // SOUTH
                     if (z === 0) {
                         if (this.shouldRenderFace(block, checkBlock(x, y, z - 1))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
-                                [wx, wy + 1, wz], [wx, wy, wz], true, 'south');
+                            const matIndex = texNameToIndex[texName] || 0;
+                            this.addQuadToMerged(targetGeo, matIndex, [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
+                                [wx, wy + 1, wz], [wx, wy, wz], true);
                         }
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x, y, z - 1)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
-                            [wx, wy + 1, wz], [wx, wy, wz], true, 'south');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx + 1, wy, wz], [wx + 1, wy + 1, wz],
+                            [wx, wy + 1, wz], [wx, wy, wz], true);
                     }
 
                     // EAST
                     if (x === CONFIG.CHUNK_SIZE - 1) {
                         if (this.shouldRenderFace(block, checkBlock(x + 1, y, z))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
-                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false, 'east');
+                            const matIndex = texNameToIndex[texName] || 0;
+                            this.addQuadToMerged(targetGeo, matIndex, [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
+                                [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false);
                         }
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x + 1, y, z)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
-                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false, 'east');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx + 1, wy, wz], [wx + 1, wy, wz + 1],
+                            [wx + 1, wy + 1, wz + 1], [wx + 1, wy + 1, wz], false);
                     }
 
                     // WEST
                     if (x === 0) {
                         if (this.shouldRenderFace(block, checkBlock(x - 1, y, z))) {
                             const texName = this.getTextureForFace(block, 'side');
-                            this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz],
-                                [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false, 'west');
+                            const matIndex = texNameToIndex[texName] || 0;
+                            this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz + 1], [wx, wy, wz],
+                                [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false);
                         }
                     } else if (this.shouldRenderFace(block, this.blocks[this.getIndex(x - 1, y, z)])) {
                         const texName = this.getTextureForFace(block, 'side');
-                        this.addQuad(geometries[texName], [wx, wy, wz + 1], [wx, wy, wz],
-                            [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false, 'west');
+                        const matIndex = texNameToIndex[texName] || 0;
+                        this.addQuadToMerged(targetGeo, matIndex, [wx, wy, wz + 1], [wx, wy, wz],
+                            [wx, wy + 1, wz], [wx, wy + 1, wz + 1], false);
                     }
                 }
             }
         }
 
-        // Twórz meshes dla każdej tekstury
-        for (const [texName, geo] of Object.entries(geometries)) {
-            if (geo.vertices.length === 0) continue;
-
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(geo.vertices, 3));
-            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(geo.uvs, 2));
-            geometry.setIndex(geo.indices);
-            geometry.computeVertexNormals();
-
+        // Stwórz materiały dla wszystkich tekstur
+        const materials = textureNames.map(texName => {
             const texture = this.textureManager.textures[texName];
-
-            // Glass i leaves mają alpha channel - transparent material
             const isTransparent = texName === 'glass' || texName.includes('leaves');
-            const isGlass = texName === 'glass';
-
-            const material = new THREE.MeshLambertMaterial({
+            return new THREE.MeshLambertMaterial({
                 map: texture,
-                side: THREE.FrontSide, // Wszystkie bloki: tylko front side
+                side: THREE.FrontSide,
                 transparent: isTransparent,
                 alphaTest: isTransparent ? 0.5 : 0
             });
+        });
 
-            const mesh = new THREE.Mesh(geometry, material);
+        // Stwórz mesh dla opaque bloków
+        if (opaqueGeo.vertices.length > 0) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(opaqueGeo.vertices, 3));
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(opaqueGeo.uvs, 2));
+            geometry.setIndex(opaqueGeo.indices);
+
+            // Dodaj groups dla multi-material
+            opaqueGeo.groups.forEach(group => {
+                geometry.addGroup(group.start, group.count, group.materialIndex);
+            });
+
+            geometry.computeVertexNormals();
+
+            const mesh = new THREE.Mesh(geometry, materials);
+            this.scene.add(mesh);
+            this.meshes.push(mesh);
+        }
+
+        // Stwórz mesh dla transparent bloków
+        if (transparentGeo.vertices.length > 0) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(transparentGeo.vertices, 3));
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(transparentGeo.uvs, 2));
+            geometry.setIndex(transparentGeo.indices);
+
+            // Dodaj groups dla multi-material
+            transparentGeo.groups.forEach(group => {
+                geometry.addGroup(group.start, group.count, group.materialIndex);
+            });
+
+            geometry.computeVertexNormals();
+
+            const mesh = new THREE.Mesh(geometry, materials);
             this.scene.add(mesh);
             this.meshes.push(mesh);
         }
@@ -258,13 +311,12 @@ export class Chunk {
         return getTextureForFace(blockType, face);
     }
 
+    // Stara metoda - zostaje dla kompatybilności
     addQuad(geo, v0, v1, v2, v3, rotateUV = false, face = 'top') {
         const startIndex = geo.count;
 
         geo.vertices.push(...v0, ...v1, ...v2, ...v3);
 
-        // UV: normalnie [0,0], [1,0], [1,1], [0,1]
-        // Rotacja o -90st: [1,0], [1,1], [0,1], [0,0]
         if (rotateUV) {
             geo.uvs.push(1, 0, 1, 1, 0, 1, 0, 0);
         } else {
@@ -279,8 +331,71 @@ export class Chunk {
         geo.count += 4;
     }
 
+    // Nowa metoda dla merged geometry z material groups
+    addQuadToMerged(geo, materialIndex, v0, v1, v2, v3, rotateUV = false) {
+        const startIndex = geo.count;
+        const indexStart = geo.indices.length;
+
+        geo.vertices.push(...v0, ...v1, ...v2, ...v3);
+
+        if (rotateUV) {
+            geo.uvs.push(1, 0, 1, 1, 0, 1, 0, 0);
+        } else {
+            geo.uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+        }
+
+        geo.indices.push(
+            startIndex, startIndex + 2, startIndex + 1,
+            startIndex, startIndex + 3, startIndex + 2
+        );
+
+        // Dodaj lub zaktualizuj group dla tego materiału
+        const lastGroup = geo.groups[geo.groups.length - 1];
+        if (lastGroup && lastGroup.materialIndex === materialIndex) {
+            // Rozszerz ostatnią grupę
+            lastGroup.count += 6; // 6 indices per quad (2 triangles)
+        } else {
+            // Stwórz nową grupę
+            geo.groups.push({
+                start: indexStart,
+                count: 6,
+                materialIndex: materialIndex
+            });
+        }
+
+        geo.count += 4;
+    }
+
     rebuildMesh() {
         this.buildMesh();
+    }
+
+    // Sprawdź czy chunk jest widoczny w frustum kamery
+    isVisibleInFrustum(frustum) {
+        return frustum.intersectsSphere(this.boundingSphere);
+    }
+
+    // Ustaw widoczność wszystkich meshów chunka
+    setVisible(visible) {
+        this.meshes.forEach(mesh => {
+            mesh.visible = visible;
+        });
+    }
+
+    // Zwolnij zasoby chunka
+    dispose() {
+        this.meshes.forEach(mesh => {
+            this.scene.remove(mesh);
+            if (mesh.geometry) mesh.geometry.dispose();
+            if (mesh.material) {
+                if (Array.isArray(mesh.material)) {
+                    mesh.material.forEach(mat => mat.dispose());
+                } else {
+                    mesh.material.dispose();
+                }
+            }
+        });
+        this.meshes = [];
     }
 }
 

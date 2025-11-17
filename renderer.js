@@ -34,6 +34,14 @@ export class GameRenderer {
         this.fpsTime = 0;
         this.isReady = false;
 
+        // Frustum culling
+        this.frustum = new THREE.Frustum();
+        this.cameraViewProjectionMatrix = new THREE.Matrix4();
+
+        // Chunk unloading timer
+        this.chunkUnloadTimer = 0;
+        this.chunkUnloadInterval = 2; // Sprawdź co 2 sekundy
+
         this.init();
     }
 
@@ -218,6 +226,21 @@ export class GameRenderer {
             // Rebuild dirty chunks (batched mesh updates) - AFTER create chunks
             // Bo nowe chunki mogą oznaczyć sąsiadów jako dirty
             this.world.rebuildDirtyChunks();
+
+            // Frustum culling - aktualizuj widoczność chunków
+            this.cameraViewProjectionMatrix.multiplyMatrices(
+                this.camera.projectionMatrix,
+                this.camera.matrixWorldInverse
+            );
+            this.frustum.setFromProjectionMatrix(this.cameraViewProjectionMatrix);
+            this.world.updateChunkVisibility(this.frustum);
+
+            // Chunk unloading - usuń oddalone chunki co 2 sekundy
+            this.chunkUnloadTimer += delta;
+            if (this.chunkUnloadTimer >= this.chunkUnloadInterval) {
+                this.world.unloadDistantChunks(playerChunkX, playerChunkZ);
+                this.chunkUnloadTimer = 0;
+            }
 
             // Update UI
             this.ui.updateStats({
