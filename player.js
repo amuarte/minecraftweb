@@ -410,18 +410,25 @@ export class Player {
         const radius = this.playerRadius;
         const height = this.playerHeight;
 
-        // Punkty sprawdzenia kolizji - ULTRA ZOPTYMALIZOWANE do 5 punktów
-        // Minimum punktów dla dokładnej kolizji
+        // Punkty sprawdzenia kolizji - ZBALANSOWANE: 11 punktów
+        // Zapewnia dokładną kolizję przy dobrej wydajności
         const checkPoints = [
-            // Środek (dół i góra)
-            [0, 0, 0],
-            [0, height - 0.1, 0],
+            // Dół: środek + 4 narożniki (5 punktów)
+            [0, 0.1, 0],
+            [radius * 0.9, 0.1, radius * 0.9],
+            [radius * 0.9, 0.1, -radius * 0.9],
+            [-radius * 0.9, 0.1, radius * 0.9],
+            [-radius * 0.9, 0.1, -radius * 0.9],
 
-            // 4 narożniki na dole (najpotrzebniejsze)
-            [radius, 0, radius],
-            [radius, 0, -radius],
-            [-radius, 0, radius],
-            [-radius, 0, -radius],
+            // Środek ciała: środek + 4 narożniki (5 punktów) - KLUCZOWE dla ścian!
+            [0, height * 0.5, 0],
+            [radius * 0.85, height * 0.5, 0],
+            [-radius * 0.85, height * 0.5, 0],
+            [0, height * 0.5, radius * 0.85],
+            [0, height * 0.5, -radius * 0.85],
+
+            // Góra: środek (1 punkt) - dla sufitów
+            [0, height - 0.15, 0],
         ];
 
         for (const [dx, dy, dz] of checkPoints) {
@@ -439,13 +446,21 @@ export class Player {
     }
 
     checkCameraCollision(cameraPos) {
-        // Sprawdź kolizję na poziomie kamery - zoptymalizowane do 3 punktów
-        const radius = this.playerRadius * 0.3;
+        // Sprawdź kolizję na poziomie kamery - 7 punktów dla dokładności
+        const radius = this.playerRadius * 0.5; // Zwiększono radius dla lepszej kolizji głowy
 
         const checkPoints = [
-            [0, 0, 0],        // Środek kamery
-            [0, 0.2, 0],      // Nieco wyżej (sufity)
-            [radius, 0, 0],   // Jeden bok
+            // Środek kamery
+            [0, 0, 0],
+
+            // Sufity - sprawdź wyżej
+            [0, 0.2, 0],
+
+            // 4 kierunki wokół głowy (N, S, E, W) - ważne dla przejść
+            [radius, 0, 0],      // East
+            [-radius, 0, 0],     // West
+            [0, 0, radius],      // North
+            [0, 0, -radius],     // South
         ];
 
         for (const [dx, dy, dz] of checkPoints) {
